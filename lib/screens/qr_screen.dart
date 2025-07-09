@@ -1,3 +1,4 @@
+//qr_screen
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'dart:convert';
@@ -17,8 +18,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
   bool _isSuccess = false;
   String _statusMessage = '';
 
-  final Set<String> _processedParticipantIds = {};
-  final Set<String> _processedEmails = {};
+ 
 
   final List<String> _requiredFields = [
     'participant_name',
@@ -30,67 +30,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
   @override
   void initState() {
     super.initState();
-    _loadProcessedIdsAndEmails();
+    // _loadProcessedIdsAndEmails();
   }
 
-  Future<void> _loadProcessedIdsAndEmails() async {
-    try {
-
-      final QuerySnapshot querySnapshot = await _firestore
-          .collection('Main')
-          .orderBy('created_at', descending: true)
-          .limit(10) //10 most recent events
-          .get();
-
-      for (var doc in querySnapshot.docs) {
-        final data = doc.data() as Map<String, dynamic>;
-        if (data['attended'] != null) {
-          final attended = List<Map<String, dynamic>>.from(data['attended']);
-
-          for (var record in attended) {
-            _processedParticipantIds.add(record['participant_id']);
-            _processedEmails.add(record['participant_email']);
-          }
-        }
-      }
-    } catch (e) {
-      print('Error loading processed IDs and emails: $e');
-    }
-  }
-
-  Future<Map<String, bool>> _checkForExistingAttendance(
-      String eventName, String participantEmail, String participantId) async {
-    try {
-      final docRef = _firestore.collection('Main').doc(eventName);
-      final docSnapshot = await docRef.get();
-
-      if (!docSnapshot.exists) {
-        return {
-          'emailExists': false,
-          'participantIdExists': false,
-        };
-      }
-
-      final data = docSnapshot.data() as Map<String, dynamic>;
-      final attended = List<Map<String, dynamic>>.from(data['attended'] ?? []);
-
-      bool emailExists = attended
-          .any((record) => record['participant_email'] == participantEmail);
-      bool participantIdExists =
-          attended.any((record) => record['participant_id'] == participantId);
-
-      return {
-        'emailExists': emailExists,
-        'participantIdExists': participantIdExists,
-      };
-    } catch (e) {
-      print('Error checking for existing attendance: $e');
-      return {
-        'emailExists': false,
-        'participantIdExists': false,
-      };
-    }
-  }
 
   void _validateRequiredFields(Map<String, dynamic> data) {
     for (var field in _requiredFields) {
@@ -108,56 +50,58 @@ class _ScannerScreenState extends State<ScannerScreen> {
     _validateRequiredFields(attendeeData);
 
     String eventName = attendeeData['event_name'];
-    String participantEmail = attendeeData['participant_email'];
+    
     String participantId = attendeeData['participant_id'];
+
+    final now = DateTime.now().toIso8601String();
+
+    final participantDocRef=_firestore
+      .collection('events')
+      .doc(eventName)
+      .collection('participants')
+      .doc(participantId);
+
+    final docRef=_firestore.collection('events').doc(eventName);
 
     
     await _firestore.runTransaction((transaction) async {
-      final docRef = _firestore.collection('Main').doc(eventName);
       final docSnapshot = await transaction.get(docRef);
       
-      //current timestamp
-      final now = DateTime.now().toIso8601String();
+      
 
       if (docSnapshot.exists) {
-        final data = docSnapshot.data() as Map<String, dynamic>;
-        final attended =
-            List<Map<String, dynamic>>.from(data['attended'] ?? []);
-
-        if (attended.any((record) =>
-            record['participant_email'] == participantEmail ||
-            record['participant_id'] == participantId)) {
-          throw Exception("$participantId has already been registered");
-        }
-
-        //add new attendance record
-        final attendanceRecord = Map<String, dynamic>.from(attendeeData);
-        attendanceRecord['check_in_time'] = now;
-
-        //update document with new attendance record and latest_checkin
+        // update check-in time if the event exists
         transaction.update(docRef, {
-          'attended': FieldValue.arrayUnion([attendanceRecord]),
-          'latest_checkin': now  // Add this field for efficient sorting
+          'latest_checkin_activity': now, 
         });
       } else {
-        //creating new doc if it doesn't exist
-        final attendanceRecord = Map<String, dynamic>.from(attendeeData);
-        attendanceRecord['check_in_time'] = now;
-
+        // create event if does not exist
         transaction.set(docRef, {
           'event_name': eventName,
           'created_at': FieldValue.serverTimestamp(),
-          'latest_checkin': now,  // Include the latest_checkin field
-          'attended': [attendanceRecord]
+          'latest_checkin_activity': now,
         });
       }
+
+      Map<String,dynamic> participantRecord={
+        'participant_name': attendeeData['participant_name'],
+        'participant_email': attendeeData['participant_email'],
+        'participant_id': participantId,
+        'event_name': eventName,
+        'department': attendeeData['department'], 
+        'role': attendeeData['role'], 
+        'attendance_status': true, 
+        'check_in_time': now,
+      };
+
+      transaction.set(participantDocRef, participantRecord, SetOptions(merge: true));
     });
+
 
     setState(() {
       _isSuccess = true;
       _statusMessage = 'Attendance marked successfully';
-      _processedParticipantIds.add(participantId);
-      _processedEmails.add(participantEmail);
+     
     });
   } catch (e) {
     print('Firebase error: $e');
@@ -165,7 +109,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
       _isSuccess = false;
       _statusMessage = e.toString();
     });
-    throw e;
+    rethrow;
   }
 }
 
@@ -179,54 +123,56 @@ class _ScannerScreenState extends State<ScannerScreen> {
     try {
       final decodedBytes = base64.decode(rawValue);
       final decodedString = utf8.decode(decodedBytes);
-      final decodedData = jsonDecode(decodedString);
+      final decodedData = jsonDecode(decodedString) as Map<String, dynamic>;
 
+      _validateRequiredFields(decodedData);
 
       final String participantEmail = decodedData['participant_email'];
       final String participantId = decodedData['participant_id'];
       final String participantName = decodedData['participant_name'];
+      final String eventName=decodedData['event_name'];
 
-      if (participantEmail.isEmpty ||
-          participantId.isEmpty ||
-          participantName.isEmpty) {
-        throw Exception('Missing required fields in QR code');
-      }
 
-      bool emailProcessed = _processedEmails.contains(participantEmail);
-      bool participantProcessed =
-          _processedParticipantIds.contains(participantId);
+      final participantDocRef=_firestore
+        .collection('events')
+        .doc(eventName)
+        .collection('participants')
+        .doc(participantId);
 
-      if (emailProcessed || participantProcessed) {
-        if (!mounted) return;
-        showDialog(
-          context: context,
-          builder: (BuildContext context) {
-            return AlertDialog(
-              title: const Row(
-                children: [
-                  Icon(Icons.warning, color: Colors.orange),
-                  SizedBox(width: 10),
-                  Text('Duplicate Scan'),
-                ],
-              ),
-              content: Text(
-                  "participant $participantId/$participantName already scanned with email $participantEmail"),
-              actions: <Widget>[
-                TextButton(
-                  child: const Text('OK'),
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                    setState(() {
-                      _isProcessing = false;
-                    });
-                  },
-                ),
+      final participantDocSnapshot= await participantDocRef.get();
+
+      if (participantDocSnapshot.exists &&
+        participantDocSnapshot.data()?['attendance_status'] == true) {
+      if (!mounted) return; //
+      showDialog( //
+        context: context,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            title: const Row( //
+              children: [
+                Icon(Icons.warning, color: Colors.orange), //
+                SizedBox(width: 10), //
+                Text('Already Marked'), // Modified title
               ],
-            );
-          },
-        );
-        return;
-      }
+            ),
+            content: Text( //
+                "Participant $participantName ($participantId) is already marked present for event $eventName."), // More specific message
+            actions: <Widget>[
+              TextButton( //
+                child: const Text('OK'),
+                onPressed: () {
+                  Navigator.of(context).pop(); //
+                  setState(() { //
+                    _isProcessing = false;
+                  });
+                },
+              ),
+            ],
+          );
+        },
+      );
+      return; 
+    }
 
       //confirmationdialogebox
 
@@ -440,4 +386,4 @@ class _ScannerScreenState extends State<ScannerScreen> {
       ),
     );
   }
-}
+} 

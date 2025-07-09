@@ -1,0 +1,82 @@
+[
+    {
+      "participant_name": "gagan",
+      "participant_email": "mysticalmoonbeam11@gmail.com",
+      "participant_id": "STU001",
+      "event_name": "Tech Conference 2025",
+      "department": "Computer Science",
+      "role": "Student"
+    },
+    {
+      "participant_name": "Jane Smith",
+      "participant_email": "lavendergrey400@gmail.com",
+      "participant_id": "STU002",
+      "event_name": "Tech Conference 2025",
+      "department": "Electrical Engineering",
+      "role": "Student"
+    },
+    {
+      "participant_name": "Michael Johnson",
+      "participant_email": "michael.j@example.com",
+      "participant_id": "STU003",
+      "event_name": "Tech Conference 2025",
+      "department": "Information Technology",
+      "role": "Student"
+    },
+    {
+      "participant_name": "Emily Wilson",
+      "participant_email": "emily.w@example.com",
+      "participant_id": "STU004",
+      "event_name": "Tech Conference 2025",
+      "department": "Computer Science",
+      "role": "Student"
+    },
+    {
+      "participant_name": "Robert Brown",
+      "participant_email": "robert.b@example.com",
+      "participant_id": "STU005",
+      "event_name": "Tech Conference 2025",
+      "department": "Mechanical Engineering",
+      "role": "Student"
+    },
+    {
+      "participant_name": "Sarah Davis",
+      "participant_email": "sarah.d@example.com",
+      "participant_id": "STU006",
+      "event_name": "Tech Conference 2025",
+      "department": "Civil Engineering",
+      "role": "Student"
+    },
+    {
+      "participant_name": "James Miller",
+      "participant_email": "james.m@example.com",
+      "participant_id": "STU007",
+      "event_name": "Tech Conference 2025",
+      "department": "Computer Science",
+      "role": "Teaching Assistant"
+    },
+    {
+      "participant_name": "Emma Anderson",
+      "participant_email": "emma.a@example.com",
+      "participant_id": "STU008",
+      "event_name": "Tech Conference 2025",
+      "department": "Information Technology",
+      "role": "Student"
+    },
+    {
+      "participant_name": "William Taylor",
+      "participant_email": "william.t@example.com",
+      "participant_id": "STU009",
+      "event_name": "Tech Conference 2025",
+      "department": "Computer Science",
+      "role": "Student"
+    },
+    {
+      "participant_name": "Olivia Thomas",
+      "participant_email": "olivia.t@example.com",
+      "participant_id": "STU010",
+      "event_name": "Tech Conference 2025",
+      "department": "Electrical Engineering",
+      "role": "Research Assistant"
+    }
+  ]

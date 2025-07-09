@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import 'events_screen.dart';
 import 'qr_screen.dart';
+import 'email_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -63,6 +64,26 @@ class HomeScreen extends StatelessWidget {
                       Icon(Icons.event, size: 48),
                       SizedBox(height: 8),
                       Text('Events', style: TextStyle(fontSize: 16)),
+                    ],
+                  ),
+                ),
+              ),
+              InkWell(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const EmailScreen(),
+                    ),
+                  );
+                },
+                child: const Card(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.email, size: 48),
+                      SizedBox(height: 8),
+                      Text('Send Mail', style: TextStyle(fontSize: 16)),
                     ],
                   ),
                 ),
