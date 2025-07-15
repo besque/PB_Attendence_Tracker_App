@@ -5,7 +5,7 @@ import json
 import os
 import smtplib
 import qrcode
-from io import BytesIO
+from io import BytesIO, StringIO
 import base64
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -13,6 +13,9 @@ from email.mime.image import MIMEImage
 import uuid
 import firebase_admin
 from firebase_admin import credentials, firestore
+from pymongo import MongoClient
+import csv
+
 
 app = Flask(__name__)
 CORS(app)
@@ -23,65 +26,104 @@ firebase_admin.initialize_app(cred)
 
 
 db = firestore.client()
-
-
-def load_participants_from_firebase(event_name=None):
-    try:
-        if event_name:
-           
-            participants_ref = db.collection('events').document(event_name).collection('participants')
-            docs = participants_ref.stream()
-            
-            participants = []
-            for doc in docs:
-                data = doc.to_dict()
-                
-                participant = {
-                    'participant_id': doc.id,
-                    'participant_name': data.get('participant_name', ''),     # Fixed: was 'name'
-                    'participant_email': data.get('participant_email', ''),   # Fixed: was 'email'
-                    'event_name': event_name
-                }
-                participants.append(participant)
-            
-            return participants
-        else:
-           
-            all_participants = []
-            events_ref = db.collection('events')
-            events = events_ref.stream()
-            
-            for event in events:
-                event_name = event.id
-                participants_ref = db.collection('events').document(event_name).collection('participants')
-                docs = participants_ref.stream()
-                
-                for doc in docs:
-                    data = doc.to_dict()
-                    participant = {
-                        'participant_id': doc.id,
-                        'participant_name': data.get('participant_name', ''),   
-                        'participant_email': data.get('participant_email', ''),   
-                        'event_name': event_name
-                    }
-                    all_participants.append(participant)
-            
-            return all_participants
         
-            
-    except Exception as e:
-        print(f"Error loading participants from Firebase: {e}")
-        return []
-            
 
-
-def load_participants_from_json():
+def get_participants_from_local_json(event_name):
+   
     try:
         with open('participants.json', 'r') as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"Error loading participants from JSON: {e}")
+            registrations = json.load(f)
+    except FileNotFoundError:
+        print("Error: test_data.json not found.")
         return []
+
+    standard_participants = []
+    
+    for reg in registrations:
+        # We need to handle the '$oid' field from the sample data
+        team_id = reg.get('_id', {}).get('$oid')
+
+        def process_participant(p, participant_num):
+            if not p or not p.get('email'):
+                return None
+            
+            background = p.get('background', {})
+            return {
+                'participant_id': f"{team_id}_p{participant_num}",
+                'team_id': team_id,
+                'event_name': event_name,
+                'participant_name': p.get('name'),
+                'participant_email': p.get('email'),
+                'age': p.get('age'),
+                'gender': p.get('gender'),
+                'phone': p.get('phone'),
+                'experienceLevel': background.get('experienceLevel'),
+                'previousParticipation': background.get('previousParticipation'),
+                'participationDetails': background.get('participationDetails'),
+                'affiliationType': background.get('affiliationType'),
+                'affiliationName': background.get('affiliationName'),
+            }
+
+        p1_data = process_participant(reg.get('participant1'), 1)
+        if p1_data:
+            standard_participants.append(p1_data)
+
+        if reg.get('participationType') == 'duo':
+            p2_data = process_participant(reg.get('participant2'), 2)
+            if p2_data:
+                standard_participants.append(p2_data)
+                
+    return standard_participants
+
+def get_ctf_participants_from_mongo(event_name):
+    MONGO_URI = os.getenv('MONGO_URI')
+    client = MongoClient(MONGO_URI)
+    mongo_db = client.get_database('ctf_database_name')
+    registrations_collection = mongo_db['ctfregs']
+
+    standard_participants = []
+    
+    for reg in registrations_collection.find({}):
+        team_id = str(reg.get('_id'))
+
+        def process_participant(p, participant_num):
+            if not p or not p.get('email'):
+                return None
+            
+            background = p.get('background', {})
+            return {
+                'participant_id': f"{team_id}_p{participant_num}",
+                'team_id': team_id,
+                'event_name': event_name,
+                
+                # Participant Fields
+                'participant_name': p.get('name'),
+                'participant_email': p.get('email'),
+                'age': p.get('age'),
+                'gender': p.get('gender'),
+                'phone': p.get('phone'),
+
+                # Background Fields
+                'experienceLevel': background.get('experienceLevel'),
+                'previousParticipation': background.get('previousParticipation'),
+                'participationDetails': background.get('participationDetails'),
+                'affiliationType': background.get('affiliationType'),
+                'affiliationName': background.get('affiliationName'),
+            }
+
+        # Process participant 1
+        p1_data = process_participant(reg.get('participant1'), 1)
+        if p1_data:
+            standard_participants.append(p1_data)
+
+        # Process participant 2 if it's a duo
+        if reg.get('participationType') == 'duo':
+            p2_data = process_participant(reg.get('participant2'), 2)
+            if p2_data:
+                standard_participants.append(p2_data)
+                
+    client.close()
+    return standard_participants
 
 
 def generate_qr_code(participant_data):
@@ -170,18 +212,41 @@ def send_email(to_email, subject, body, participant_data=None):
         print(f"Error sending email: {e}")
         return False
 
+def send_confirmation_email(participant_name, to_email, event_name):
+    try:
+        msg = MIMEMultipart('related')
+        msg['Subject'] = f"Attendance Confirmed: {event_name}"
+        msg['From'] = EMAIL_FROM
+        msg['To'] = to_email
+
+        html_body = f"""
+        <html>
+        <body>
+            <p>Hello {participant_name},</p>
+            <p>This email confirms your successful check-in for the event: <b>{event_name}</b>.</p>
+            <p>Thank you for participating!</p>
+            <p>Regards,<br>Event Team</p>
+        </body>
+        </html>
+        """
+        msg.attach(MIMEText(html_body, 'html'))
+
+        with smtplib.SMTP(EMAIL_SERVER, EMAIL_PORT) as server:
+            server.starttls()
+            server.login(EMAIL_USER, EMAIL_PASSWORD)
+            server.send_message(msg)
+        return True
+    except Exception as e:
+        print(f"Error sending confirmation email: {e}")
+        return False
+
 
 @app.route('/participants', methods=['GET'])
 def get_participants():
     try:
-        
         event_name = request.args.get('event', None)
-        
         print(f"Fetching participants for event: {event_name}") 
-        
-       
-        participants = load_participants_from_firebase(event_name)
-        
+        participants = get_participants_from_local_json(event_name)
         print(f"Found {len(participants)} participants")  
         
         return jsonify(participants)
@@ -240,6 +305,100 @@ def send_emails_endpoint():
     
     except Exception as e:
         return jsonify({'success': False, 'message': f'Error: {str(e)}'}), 500
+
+@app.route('/mark-attendance', methods=['POST'])
+def mark_attendance():
+    try:
+        # get the participant data from QR 
+        data = request.json
+        event_name = data.get('event_name')
+        participant_id = data.get('participant_id')
+        
+        event_ref = db.collection('events').document(event_name)
+        # saving attendance datat to firebase in a subcollection called attendees
+        attendee_ref = db.collection('events').document(event_name).collection('attendees').document(participant_id)
+
+        event_ref.set({
+            'event_name': event_name,
+            'last_activity': firestore.SERVER_TIMESTAMP
+        }, merge=True)
+        
+        attendee_data = data.copy() 
+        attendee_data['check_in_time'] = firestore.SERVER_TIMESTAMP 
+        attendee_ref.set(attendee_data)
+        
+        
+        send_confirmation_email(
+            participant_name=data.get('participant_name'),
+            to_email=data.get('participant_email'),
+            event_name=event_name
+        )
+        
+        
+        return jsonify({'success': True, 'message': 'Attendance marked and confirmation sent.'})
+        
+    except Exception as e:
+        print(f"Error marking attendance: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/export-csv', methods=['GET'])
+def export_csv():
+    
+    event_name = request.args.get('event')
+    if not event_name:
+        return jsonify({'error': 'Event name is required'}), 400
+
+    try:
+        # Reference the 'attendees' subcollection in your Firebase
+        attendees_ref = db.collection('events').document(event_name).collection('attendees')
+        docs = attendees_ref.stream()
+
+        # StringIO to create a CSV file in memory
+        output = StringIO()
+        writer = csv.writer(output)
+
+        # header row
+        writer.writerow([
+            'Participant ID', 'Team ID', 'Name', 'Email', 'Age', 'Gender', 'Phone',
+            'Experience Level', 'Previously Participated', 'Participation Details',
+            'Affiliation Type', 'Affiliation Name', 'Check-in Time'
+        ])
+
+        # rows for each attendee
+        for doc in docs:
+            data = doc.to_dict()
+            check_in_time = data.get('check_in_time')
+            formatted_time = check_in_time.strftime('%Y-%m-%d %H:%M:%S') if check_in_time else 'N/A'
+
+            writer.writerow([
+                data.get('participant_id', ''),
+                data.get('team_id', ''),
+                data.get('participant_name', ''),
+                data.get('participant_email', ''),
+                data.get('age', ''),
+                data.get('gender', ''),
+                data.get('phone', ''),
+                data.get('experienceLevel', ''),
+                data.get('previousParticipation', ''),
+                data.get('participationDetails', ''),
+                data.get('affiliationType', ''),
+                data.get('affiliationName', ''),
+                formatted_time
+            ])
+
+       
+        csv_output = output.getvalue()
+        output.close()
+
+        
+        return csv_output, 200, {
+            'Content-Type': 'text/csv',
+            'Content-Disposition': f'attachment; filename="{event_name}_attendance.csv"'
+        }
+
+    except Exception as e:
+        print(f"Error generating CSV: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/test', methods=['GET'])
 def test_endpoint():

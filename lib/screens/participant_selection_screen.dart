@@ -1,38 +1,17 @@
 import 'package:flutter/material.dart';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
-import 'package:flutter_dotenv/flutter_dotenv.dart';
+import '../models/participant_model.dart';
+import '../services/mailing_service.dart';
+import '../widgets/participant_search_bar.dart';
+import '../widgets/participant_sort_controls.dart';
 
-final String baseUrl = dotenv.env['BASE_URL'] ?? 'http://error.url.not.set';
-
-class ParticipantModel {
-  final String name;
-  final String email;
-  final String id;
-  final String eventName;
-  bool isSelected;
-
-  ParticipantModel({
-    required this.name,
-    required this.email,
-    required this.id,
-    required this.eventName,
-    this.isSelected = true,
-  });
-
-  Map<String, dynamic> toJson() => {
-        'participant_name': name,
-        'participant_email': email,
-        'participant_id': id,
-        'event_name': eventName,
-      };
-
-  factory ParticipantModel.fromJson(Map<String, dynamic> json) => ParticipantModel(
-        name: json['participant_name'],
-        email: json['participant_email'],
-        id: json['participant_id'],
-        eventName: json['event_name'],
-      );
+enum ParticipantSortOption {
+  name,
+  teamId,
+  affiliation,
+  affiliationType,
+  experienceLevel,
+  previousParticipation,
+  age
 }
 
 class ParticipantSelectionScreen extends StatefulWidget {
@@ -50,11 +29,20 @@ class ParticipantSelectionScreen extends StatefulWidget {
   });
 
   @override
-  State<ParticipantSelectionScreen> createState() => _ParticipantSelectionScreenState();
+  State<ParticipantSelectionScreen> createState() =>
+      _ParticipantSelectionScreenState();
 }
 
-class _ParticipantSelectionScreenState extends State<ParticipantSelectionScreen> {
-  List<ParticipantModel> _participants = [];
+class _ParticipantSelectionScreenState
+    extends State<ParticipantSelectionScreen> {
+  final MailingService _mailingService = MailingService();
+
+
+  List<ParticipantModel> _originalParticipants = [];
+  List<ParticipantModel> _displayParticipants = [];
+
+  final TextEditingController _searchController = TextEditingController();
+  ParticipantSortOption _sortOption = ParticipantSortOption.name;
   bool _isLoading = true;
   bool _selectAll = true;
 
@@ -62,32 +50,80 @@ class _ParticipantSelectionScreenState extends State<ParticipantSelectionScreen>
   void initState() {
     super.initState();
     _fetchParticipants();
+    _searchController.addListener(_applyFiltersAndSort);
   }
 
-  Future<void> _fetchParticipants() async {
-    setState(() {
-      _isLoading = true;
-    });
-    try {
-      final url = Uri.parse('$baseUrl/participants?event=${Uri.encodeComponent(widget.eventName)}');
-      final response = await http.get(url);
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
-      if (response.statusCode == 200) {
-        final List<dynamic> jsonData = json.decode(response.body);
-        setState(() {
-          _participants = jsonData.map((item) => ParticipantModel.fromJson(item)).toList();
-          _isLoading = false;
-        });
-      } else {
-        _showErrorDialog('Failed to load participants: ${response.statusCode}');
-      }
+
+  Future<void> _fetchParticipants() async {
+    try {
+      final participants =
+          await _mailingService.fetchParticipants(widget.eventName);
+      if (!mounted) return;
+      setState(() {
+        _originalParticipants = participants;
+        _applyFiltersAndSort();
+        _isLoading = false;
+      });
     } catch (e) {
-      _showErrorDialog('Error: $e');
+      _showErrorDialog(e.toString());
     }
   }
 
+  void _applyFiltersAndSort() {
+    List<ParticipantModel> tempParticipants = List.from(_originalParticipants);
+    final query = _searchController.text.toLowerCase();
+
+    if (query.isNotEmpty) {
+      tempParticipants = tempParticipants.where((p) {
+        final nameLower = p.name.toLowerCase();
+        final emailLower = p.email.toLowerCase();
+        final affiliationLower = p.affiliationName?.toLowerCase() ?? '';
+        return nameLower.contains(query) ||
+               emailLower.contains(query) ||
+               affiliationLower.contains(query);
+      }).toList();
+    }
+
+    switch (_sortOption) {
+      case ParticipantSortOption.name:
+        tempParticipants.sort((a, b) => a.name.compareTo(b.name));
+        break;
+      case ParticipantSortOption.teamId:
+        tempParticipants.sort((a, b) => a.teamId.compareTo(b.teamId));
+        break;
+      case ParticipantSortOption.affiliation:
+        tempParticipants.sort((a, b) => (a.affiliationName ?? '').compareTo(b.affiliationName ?? ''));
+        break;
+      case ParticipantSortOption.affiliationType:
+        tempParticipants.sort((a, b) => (a.affiliationType ?? '').compareTo(b.affiliationType ?? ''));
+        break;
+      case ParticipantSortOption.experienceLevel:
+        tempParticipants.sort((a, b) => (a.experienceLevel ?? '').compareTo(b.experienceLevel ?? ''));
+        break;
+      case ParticipantSortOption.previousParticipation:
+        tempParticipants.sort((a, b) => (b.previousParticipation ?? false) ? 1 : -1);
+        break;
+      case ParticipantSortOption.age:
+        tempParticipants.sort((a, b) => (a.age ?? 999).compareTo(b.age ?? 999));
+        break;
+    }
+
+    setState(() {
+      _displayParticipants = tempParticipants;
+    });
+  }
+
   Future<void> _sendEmails() async {
-    final selectedParticipants = _participants.where((p) => p.isSelected).map((p) => p.toJson()).toList();
+    final selectedParticipants = _originalParticipants
+        .where((p) => p.isSelected)
+        .map((p) => p.toJson())
+        .toList();
 
     if (selectedParticipants.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -95,41 +131,99 @@ class _ParticipantSelectionScreenState extends State<ParticipantSelectionScreen>
       );
       return;
     }
-    
+
     _showSendingDialog();
+
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/send-emails'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'subject': widget.subject,
-          'body': widget.body,
-          'include_qr': widget.includeQR,
-          'participants': selectedParticipants,
-        }),
+      final responseData = await _mailingService.sendEmails(
+        subject: widget.subject,
+        body: widget.body,
+        includeQR: widget.includeQR,
+        participants: selectedParticipants,
       );
-      Navigator.of(context).pop();
-      final responseData = json.decode(response.body);
-      _showResultDialog(response.statusCode == 200 && responseData['success'],
+      if (!mounted) return;
+      Navigator.of(context).pop(); // Close the sending dialog
+      _showResultDialog(responseData['success'] ?? false,
           responseData['message'] ?? 'An unknown error occurred.');
     } catch (e) {
-      Navigator.of(context).pop();
-      _showResultDialog(false, 'Failed to connect to the server.');
+      if (!mounted) return;
+      Navigator.of(context).pop(); // Close the sending dialog
+      _showResultDialog(false, e.toString());
     }
   }
 
   void _showErrorDialog(String message) {
     if (!mounted) return;
     setState(() => _isLoading = false);
-    showDialog(context: context, builder: (c) => AlertDialog(title: const Text('Error'), content: Text(message), actions: [TextButton(child: const Text('OK'), onPressed: () => Navigator.of(c).pop())]));
+    showDialog(
+      context: context,
+      builder: (c) => AlertDialog(
+          title: const Text('Error'),
+          content: Text(message),
+          actions: [
+            TextButton(
+                child: const Text('OK'), onPressed: () => Navigator.of(c).pop())
+          ]),
+    );
   }
 
+  Widget _buildSortContextRow(ParticipantModel participant) {
+    String? contextText;
+    switch (_sortOption) {
+      case ParticipantSortOption.affiliation:
+        contextText = 'Affiliation: ${participant.affiliationName ?? 'N/A'}';
+        break;
+      case ParticipantSortOption.affiliationType:
+        contextText = 'Type: ${participant.affiliationType ?? 'N/A'}';
+        break;
+      case ParticipantSortOption.experienceLevel:
+        contextText = 'Experience: ${participant.experienceLevel ?? 'N/A'}';
+        break;
+      case ParticipantSortOption.previousParticipation:
+        contextText = 'Participated Before: ${participant.previousParticipation == true ? "Yes" : "No"}';
+        break;
+      case ParticipantSortOption.age:
+        contextText = 'Age: ${participant.age?.toString() ?? 'N/A'}';
+        break;
+      default:
+        return const SizedBox.shrink();
+    }
+
+    return Text(
+      contextText,
+      style: const TextStyle(fontSize: 12, color: Colors.deepPurple, fontStyle: FontStyle.italic),
+    );
+  }
+
+
+
   void _showSendingDialog() {
-    showDialog(context: context, barrierDismissible: false, builder: (c) => const AlertDialog(content: Row(children: [CircularProgressIndicator(), SizedBox(width: 20), Text("Sending...")])));
+    showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (c) => const AlertDialog(
+                content: Row(children: [
+              CircularProgressIndicator(),
+              SizedBox(width: 20),
+              Text("Sending...")
+            ])));
   }
 
   void _showResultDialog(bool success, String message) {
-    showDialog(context: context, builder: (c) => AlertDialog(title: Text(success ? "Success" : "Error"), content: Text(message), actions: [TextButton(onPressed: () { Navigator.of(c).pop(); if(success) Navigator.of(context).pop(); }, child: const Text("OK"))]));
+    showDialog(
+        context: context,
+        builder: (c) => AlertDialog(
+                title: Text(success ? "Success" : "Error"),
+                content: Text(message),
+                actions: [
+                  TextButton(
+                      onPressed: () {
+                        Navigator.of(c).pop(); // Close result dialog
+                        if (success)
+                          Navigator.of(context).pop(); // Go back if successful
+                      },
+                      child: const Text("OK"))
+                ]));
   }
 
   @override
@@ -140,13 +234,23 @@ class _ParticipantSelectionScreenState extends State<ParticipantSelectionScreen>
           ? const Center(child: CircularProgressIndicator())
           : Column(
               children: [
+                ParticipantSearchBar(controller: _searchController),
+                ParticipantSortControls(
+                  currentSortOption: _sortOption,
+                  onSortOptionChanged: (newOption) {
+                    setState(() {
+                      _sortOption = newOption;
+                      _applyFiltersAndSort();
+                    });
+                  },
+                ),
                 CheckboxListTile(
                   title: const Text("Select All"),
                   value: _selectAll,
                   onChanged: (bool? value) {
                     setState(() {
                       _selectAll = value ?? false;
-                      for (var p in _participants) {
+                      for (var p in _displayParticipants) {
                         p.isSelected = _selectAll;
                       }
                     });
@@ -154,21 +258,29 @@ class _ParticipantSelectionScreenState extends State<ParticipantSelectionScreen>
                 ),
                 Expanded(
                   child: ListView.builder(
-                    itemCount: _participants.length,
+                    itemCount: _displayParticipants.length,
                     itemBuilder: (context, index) {
-                      final participant = _participants[index];
+                      final participant = _displayParticipants[index];
                       return CheckboxListTile(
+                        isThreeLine: true,
                         title: Text(participant.name),
-                        subtitle: Text(participant.email),
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start, 
+                          children: [
+                            Text(participant.email),
+                            Text(
+                              'Team: ${participant.teamId}',
+                              style: const TextStyle(fontSize: 12, color: Colors.blueGrey),
+                            ),
+                            _buildSortContextRow(participant),
+                          ],
+                        ),
                         value: participant.isSelected,
                         onChanged: (bool? value) {
                           setState(() {
                             participant.isSelected = value ?? false;
-                            if (_participants.every((p) => p.isSelected)) {
-                              _selectAll = true;
-                            } else {
-                              _selectAll = false;
-                            }
+                            _selectAll =
+                                _displayParticipants.every((p) => p.isSelected);
                           });
                         },
                       );
@@ -181,7 +293,8 @@ class _ParticipantSelectionScreenState extends State<ParticipantSelectionScreen>
                     onPressed: _sendEmails,
                     icon: const Icon(Icons.send),
                     label: const Text('Send Emails'),
-                    style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)),
+                    style: ElevatedButton.styleFrom(
+                        minimumSize: const Size(double.infinity, 50)),
                   ),
                 ),
               ],
